@@ -1,0 +1,8 @@
+{
+  "name": "ore-nine-arc-keeper",
+  "main": "keeper.js",
+  "compatibility_date": "2026-09-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": { "ARC_RPC": "https://rpc.mainnet.arc.io", "GAME_ADDRESS": "" }
+}
