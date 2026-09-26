@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "compile": "node scripts/compile.mjs",
     "deploy:mainnet": "node scripts/deploy.mjs",
     "build": "npm run compile && tsc --noEmit && vite build",
     "dev": "vite --host 127.0.0.1",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "cross-env TEST_EVM=shanghai node scripts/compile.mjs && node --test test"
+    "test": "cross-env TEST_EVM=shanghai node scripts/compile.mjs && node --test test/round.test.mjs"
   },
   "dependencies": {
     "@d20dao/vrf-sdk": "0.4.0",
