@@ -1,7 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Contract, JsonRpcProvider, Wallet } from 'ethers';
 
-const RETRY_MS = 5_000;
+const RETRY_MS = 60_000;
+const RATE_LIMIT_BASE_MS = 60_000;
+const RATE_LIMIT_MAX_MS = 5 * 60_000;
 const GAME_ABI = [
   'function currentRound() view returns (uint256)',
   'function roundInfo(uint256) view returns (tuple(uint64 openedAt,uint64 closesAt,uint8 status,uint16 occupiedMask,uint8 occupiedCount,uint8 winner,uint256 requestId,uint256 oracleFee,uint256 gross,uint256 net,uint256 fees,uint256 claimed,uint256 losingRefund,uint256 bonus,uint256 participants,uint256 claims,uint256[9] cells))',
@@ -21,18 +23,32 @@ async function advance(env) {
   const provider = new JsonRpcProvider(env.ARC_RPC || 'https://rpc.mainnet.arc.io', 5042);
   if ((await provider.getNetwork()).chainId !== 5042n) throw Error('Wrong Arc chain');
   const wallet = new Wallet(env.KEEPER_PRIVATE_KEY, provider);
-  const game = new Contract(env.GAME_ADDRESS, GAME_ABI, wallet);
-  const id = await game.currentRound();
-  const round = await game.roundInfo(id);
+  // View calls do not need the keeper address. Keeping them on the read-only
+  // provider also avoids RPC-specific eth_call behaviour for funded senders.
+  const readGame = new Contract(env.GAME_ADDRESS, GAME_ABI, provider);
+  const game = readGame.connect(wallet);
+  let id;
+  try {
+    id = await readGame.currentRound();
+  } catch (error) {
+    console.error('currentRound RPC failure:', {
+      message: error?.shortMessage ?? error?.message,
+      rpcCode: error?.info?.error?.code ?? error?.error?.code,
+      rpcMessage: error?.info?.error?.message ?? error?.error?.message,
+      rpcData: error?.info?.error?.data ?? error?.error?.data
+    });
+    throw error;
+  }
+  const round = await readGame.roundInfo(id);
   const now = BigInt((await provider.getBlock('latest')).timestamp);
   let tx;
 
   if (round.status === 0n) {
     if (now < round.closesAt) return nextAlarm(round);
     if (round.occupiedCount >= 2n && now < round.closesAt + 60n) {
-      const oracle = new Contract(await game.oracle(), ['function quoteFeeAt(uint32,uint256) view returns (uint256)'], provider);
+      const oracle = new Contract(await readGame.oracle(), ['function quoteFeeAt(uint32,uint256) view returns (uint256)'], provider);
       const base = (await provider.getBlock('latest')).baseFeePerGas ?? 0n;
-      const [reserve, quote] = await Promise.all([game.operationsReserve(), oracle.quoteFeeAt(100000, base * 12n / 10n)]);
+      const [reserve, quote] = await Promise.all([readGame.operationsReserve(), oracle.quoteFeeAt(100000, base * 12n / 10n)]);
       if (reserve < quote) {
         console.error(`Round ${id}: operating reserve is below the current oracle quote`);
         return Date.now() + RETRY_MS;
@@ -42,7 +58,7 @@ async function advance(env) {
     tx = await game.requestDraw();
   } else if (round.status === 1n) {
     try {
-      await game.finalize.staticCall();
+      await readGame.finalize.staticCall();
       tx = await game.finalize();
     } catch (error) {
       if (now < round.closesAt + 60n) {
@@ -58,8 +74,8 @@ async function advance(env) {
 
   console.log(`Round ${id}: submitted ${tx.hash}`);
   await tx.wait();
-  const nextId = await game.currentRound();
-  const next = await game.roundInfo(nextId);
+  const nextId = await readGame.currentRound();
+  const next = await readGame.roundInfo(nextId);
   return nextAlarm(next);
 }
 
@@ -71,6 +87,11 @@ export class GameKeeper extends DurableObject {
 
   async fetch(request) {
     if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+    // Cron is only a recovery path. The alarm already schedules the next
+    // check, so a minute-boundary Cron must not add another RPC call.
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm !== null && alarm > Date.now() - 2 * RETRY_MS)
+      return new Response('Keeper already scheduled');
     await this.run();
     return new Response('Keeper checked');
   }
@@ -84,11 +105,32 @@ export class GameKeeper extends DurableObject {
   }
 
   async process() {
+    const blockedUntil = await this.ctx.storage.get('rpcBackoffUntil');
+    if (typeof blockedUntil === 'number' && blockedUntil > Date.now()) {
+      await this.ctx.storage.setAlarm(blockedUntil);
+      return;
+    }
     try {
       await this.ctx.storage.setAlarm(await advance(this.env));
+      if (await this.ctx.storage.get('rpcRateFailures')) {
+        await this.ctx.storage.delete('rpcRateFailures');
+        await this.ctx.storage.delete('rpcBackoffUntil');
+      }
     } catch (error) {
       console.error('Keeper attempt failed:', error);
-      await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);
+      const rpcCode = error?.info?.error?.code ?? error?.error?.code;
+      const rpcMessage = error?.info?.error?.message ?? error?.error?.message ?? '';
+      if (rpcCode === -32005 || /rate limit exceeded/i.test(rpcMessage)) {
+        const failures = Math.min(5, (await this.ctx.storage.get('rpcRateFailures') ?? 0) + 1);
+        const delay = Math.min(RATE_LIMIT_MAX_MS, RATE_LIMIT_BASE_MS * 2 ** (failures - 1));
+        const retryAt = Date.now() + delay;
+        await this.ctx.storage.put('rpcRateFailures', failures);
+        await this.ctx.storage.put('rpcBackoffUntil', retryAt);
+        console.error(`Arc RPC rate-limited; next attempt in ${delay / 1000}s`);
+        await this.ctx.storage.setAlarm(retryAt);
+      } else {
+        await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);
+      }
     }
   }
 }

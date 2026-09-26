@@ -25,7 +25,7 @@
 4. 截止+60 秒仍没有有效链上结果，任何人调用 `cancelExpired()`；若结果已经可读，该函数拒绝取消，应调用 `finalize()`。之后到达的旧结果不改变已经取消的轮次。
 5. D20DAO 自身的请求有效期从发起请求时计算，也是 60 秒，可能晚于本游戏的截止+60 秒。若请求过期且游戏已取消，任何人可调用 `refundExpiredOracleRequest(roundId)` 向 D20DAO 索回可退的开奖费。D20DAO 若将退款记为 credit，调用 `recoverOracleCredit()` 收回金库。
 
-独立的 Cloudflare keeper 使用 Durable Object alarm 按本轮截止时间尝试发起开奖，并每 5 秒检查 D20DAO 结果；每分钟的 Cron 用于启动与故障恢复。页面显示距可发起开奖、开奖请求窗口及等待随机结果的状态。**任何后台调度都不保证在精确秒数发交易**；Cloudflare alarm 可能延迟，链上交易也可能失败。若超过合约的 60 秒开奖窗口，本轮按链上规则取消退款。页面保留公开操作按钮，keeper 离线时任何钱包仍可自行付 Gas 推进。
+独立的 Cloudflare keeper 使用 Durable Object alarm 按本轮截止时间尝试发起开奖，并每 60 秒检查 D20DAO 结果；每分钟的 Cron 仅在没有待执行 alarm 时启动与恢复，避免重复读取。页面显示距可发起开奖、开奖请求窗口及等待随机结果的状态。只读检查不消耗链上 Gas，实际发起开奖、结算与取消交易各自消耗 keeper Gas。**任何后台调度都不保证在精确秒数发交易**；Cloudflare alarm 可能延迟，链上交易也可能失败。若超过合约的 60 秒开奖窗口，本轮按链上规则取消退款。页面保留公开操作按钮，keeper 离线时任何钱包仍可自行付 Gas 推进。
 
 ## 本地检查
 

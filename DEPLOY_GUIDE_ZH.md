@@ -80,7 +80,7 @@ Codespaces 是 GitHub 的云端开发终端；仓库中的 `.devcontainer/devcon
 
 合约部署后运营金库初始为 0。用钱包向**九格合约地址**发送少量 **Arc 原生 USDC**（或调用 `fundOperations()`），页面的“运营金库余额”应增加。该余额支付 D20DAO 的实时报价；玩家的投入不能替运营金库垫付。服务费用动态变化，页面显示估价和每轮实际支付额。[D20DAO 收费说明](https://d20dao.org/docs/getting-started)。
 
-网页提供“发起开奖”“完成结算”“超时取消”按钮。网页本身不会自动发送付费交易；若希望无人在线也推进轮次，需要单独部署仓库 `worker/` 中的 **`ore-nine-arc-keeper`**。它用 Durable Object alarm 按链上截止时间尝试发起开奖，并每 5 秒检查 D20DAO 结果；每分钟 Cron 负责启动和恢复。请先核对 `worker/wrangler.jsonc` 的 `GAME_ADDRESS` 是当前九格合约地址，并准备一个有少量 Arc 原生 USDC 的**独立 keeper 钱包**支付其 Gas。然后在 Codespaces 终端依次运行：
+网页提供“发起开奖”“完成结算”“超时取消”按钮。网页本身不会自动发送付费交易；若希望无人在线也推进轮次，需要单独部署仓库 `worker/` 中的 **`ore-nine-arc-keeper`**。它用 Durable Object alarm 按链上截止时间尝试发起开奖，开奖请求后每 60 秒检查 D20DAO 结果；每分钟 Cron 只在没有待执行 alarm 时启动或恢复，避免重复请求 RPC。请先核对 `worker/wrangler.jsonc` 的 `GAME_ADDRESS` 是当前九格合约地址，并准备一个有少量 Arc 原生 USDC 的**独立 keeper 钱包**支付其 Gas。然后在 Codespaces 终端依次运行：
 
 ```bash
 npx wrangler login
@@ -89,6 +89,8 @@ npx wrangler secret put KEEPER_PRIVATE_KEY --config worker/wrangler.jsonc
 ```
 
 先创建并部署独立 Worker，再用第三条命令添加 Secret；第三条命令会提示输入 keeper 钱包私钥。添加完成前若定时任务提前运行，只会报告缺少私钥，不会发送交易。不要把私钥写进仓库、聊天或 `VITE_*` 变量，也不要使用部署钱包。部署后到 Cloudflare 的 `ore-nine-arc-keeper` 项目检查 Cron Trigger 与日志。Cron 配置初次传播可能需要数分钟，最多约 15 分钟；空轮自动取消也要支付 keeper Gas。Cloudflare alarm 或链上交易可能延迟，**不保证每轮一定在合约的 60 秒开奖窗口内完成请求**。若未能按时请求，合约将按规则取消并全额退款。
+
+如果 keeper 日志出现 `rate limit exceeded` 或 RPC 错误码 `-32005`，说明公共 Arc RPC 正在限流。keeper 会延长重试间隔，避免持续请求，但限流期间不能保证及时开奖。需要稳定运行时，可从 [Arc 官方列出的节点服务商](https://docs.arc.io/arc/tools/node-providers)申请**支持 Arc 主网链 ID 5042** 的专用 HTTPS RPC；先在本地用 `eth_chainId` 和合约的 `currentRound()` 验证，再运行 `npx wrangler secret put ARC_RPC --config worker/wrangler.jsonc`，在提示中输入完整 RPC URL。若 URL 含 API key，它只能作为 Cloudflare Secret 保存，不能写入 GitHub、构建变量或聊天。`worker/wrangler.jsonc` 不再声明同名普通变量，未配置 Secret 时默认使用公共 Arc RPC。只读 RPC 检查不支付链上 Gas；每次发起开奖、完成结算或取消是独立链上交易，仍会消耗 keeper 钱包的 Gas。检查间隔改为 60 秒后，完成结算和下一轮开始可能比随机结果到达晚约一分钟。
 
 ## 五、测试顺序与常见问题
 
