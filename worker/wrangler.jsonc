@@ -4,5 +4,7 @@
   "compatibility_date": "2026-09-25",
   "compatibility_flags": ["nodejs_compat"],
   "triggers": { "crons": ["* * * * *"] },
-  "vars": { "ARC_RPC": "https://rpc.mainnet.arc.io", "GAME_ADDRESS": "" }
+  "durable_objects": { "bindings": [{ "name": "KEEPER_COORDINATOR", "class_name": "GameKeeper" }] },
+  "exports": { "GameKeeper": { "type": "durable-object", "storage": "sqlite" } },
+  "vars": { "ARC_RPC": "https://rpc.mainnet.arc.io", "GAME_ADDRESS": "0x2EfC136227C623e00071F7cF216aEEaf2f14d452" }
 }

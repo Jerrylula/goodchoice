@@ -80,7 +80,15 @@ Codespaces 是 GitHub 的云端开发终端；仓库中的 `.devcontainer/devcon
 
 合约部署后运营金库初始为 0。用钱包向**九格合约地址**发送少量 **Arc 原生 USDC**（或调用 `fundOperations()`），页面的“运营金库余额”应增加。该余额支付 D20DAO 的实时报价；玩家的投入不能替运营金库垫付。服务费用动态变化，页面显示估价和每轮实际支付额。[D20DAO 收费说明](https://d20dao.org/docs/getting-started)。
 
-网页提供“发起开奖”“完成结算”“超时取消”按钮，连接钱包的用户可手动推进。若希望无人在线也自动处理，可再部署仓库 `worker/` 里的**第二个 Cloudflare Worker**：先把 `worker/wrangler.jsonc` 的 `GAME_ADDRESS` 改成九格合约地址，再在 Codespaces 里执行 `npx wrangler login`、`npx wrangler secret put KEEPER_PRIVATE_KEY --config worker/wrangler.jsonc`、`npx wrangler deploy --config worker/wrangler.jsonc`。`KEEPER_PRIVATE_KEY` 应属于专用 keeper 钱包，仅用于支付发起开奖等操作的 Gas；给它单独准备原生 USDC，不要使用部署钱包。Cron 每分钟尝试一次，不保证恰好在截止秒数执行，链上时间仍是最终规则。
+网页提供“发起开奖”“完成结算”“超时取消”按钮。网页本身不会自动发送付费交易；若希望无人在线也推进轮次，需要单独部署仓库 `worker/` 中的 **`ore-nine-arc-keeper`**。它用 Durable Object alarm 按链上截止时间尝试发起开奖，并每 5 秒检查 D20DAO 结果；每分钟 Cron 负责启动和恢复。请先核对 `worker/wrangler.jsonc` 的 `GAME_ADDRESS` 是当前九格合约地址，并准备一个有少量 Arc 原生 USDC 的**独立 keeper 钱包**支付其 Gas。然后在 Codespaces 终端依次运行：
+
+```bash
+npx wrangler login
+npx wrangler deploy --config worker/wrangler.jsonc
+npx wrangler secret put KEEPER_PRIVATE_KEY --config worker/wrangler.jsonc
+```
+
+先创建并部署独立 Worker，再用第三条命令添加 Secret；第三条命令会提示输入 keeper 钱包私钥。添加完成前若定时任务提前运行，只会报告缺少私钥，不会发送交易。不要把私钥写进仓库、聊天或 `VITE_*` 变量，也不要使用部署钱包。部署后到 Cloudflare 的 `ore-nine-arc-keeper` 项目检查 Cron Trigger 与日志。Cron 配置初次传播可能需要数分钟，最多约 15 分钟；空轮自动取消也要支付 keeper Gas。Cloudflare alarm 或链上交易可能延迟，**不保证每轮一定在合约的 60 秒开奖窗口内完成请求**。若未能按时请求，合约将按规则取消并全额退款。
 
 ## 五、测试顺序与常见问题
 
@@ -89,5 +97,7 @@ Codespaces 是 GitHub 的云端开发终端；仓库中的 `.devcontainer/devcon
 3. “网页显示未配置合约”：检查 `VITE_GAME_ADDRESS` 是否填在**构建变量**且重新构建。
 4. “`package.json` 不存在”：GitHub 目录多套了一层，修改 Cloudflare Root directory 或调整仓库结构。
 5. “旧合约能不能直接加项目方提款？”：不能。本合约没有升级入口。新版必须单独部署，新网页填新版合约地址；旧合约上的资金不会自动迁移。
+6. “Node 24 提示找不到 `/test`”：旧版上传包的测试脚本把目录当作入口。修正版已改为明确的 `test/round.test.mjs`；若正在旧 Codespaces 中，可先运行 `npm pkg set 'scripts.test=cross-env TEST_EVM=shanghai node scripts/compile.mjs && node --test test/round.test.mjs'`，再运行 `npm test`。
+7. “`npm ci` 报审计漏洞”：这是依赖审计提示，不是安装失败。高危报告主要来自仅供本地测试的 Ganache 旧依赖树；项目用到的 `solc` 0.8.28 由 D20DAO 的精确 Solidity 版本约束。不要直接运行 `npm audit fix --force`，它可能替换编译器或测试框架。测试和构建可以继续，但真实资金上线前仍需独立检查依赖与合约。
 
 主网上线前建议安排独立合约审计。D20DAO 是外部可升级服务，它的官方[安全说明](https://d20dao.org/docs/security)明确没有外部审计或公开 SLA；本项目测试通过也不能替代真实资金环境中的审计。

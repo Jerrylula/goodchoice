@@ -25,7 +25,7 @@
 4. 截止+60 秒仍没有有效链上结果，任何人调用 `cancelExpired()`；若结果已经可读，该函数拒绝取消，应调用 `finalize()`。之后到达的旧结果不改变已经取消的轮次。
 5. D20DAO 自身的请求有效期从发起请求时计算，也是 60 秒，可能晚于本游戏的截止+60 秒。若请求过期且游戏已取消，任何人可调用 `refundExpiredOracleRequest(roundId)` 向 D20DAO 索回可退的开奖费。D20DAO 若将退款记为 credit，调用 `recoverOracleCredit()` 收回金库。
 
-Cloudflare 定时任务每分钟运行一次，只是自动化辅助，**不保证**在精确秒数发交易或开出每一轮。链上时间和公共函数是最终规则。页面也提供发起开奖、完成结算、超时取消按钮。若 keeper 离线，任何钱包都可以操作，且需要自行付 Gas。
+独立的 Cloudflare keeper 使用 Durable Object alarm 按本轮截止时间尝试发起开奖，并每 5 秒检查 D20DAO 结果；每分钟的 Cron 用于启动与故障恢复。页面显示距可发起开奖、开奖请求窗口及等待随机结果的状态。**任何后台调度都不保证在精确秒数发交易**；Cloudflare alarm 可能延迟，链上交易也可能失败。若超过合约的 60 秒开奖窗口，本轮按链上规则取消退款。页面保留公开操作按钮，keeper 离线时任何钱包仍可自行付 Gas 推进。
 
 ## 本地检查
 
@@ -48,7 +48,7 @@ npm run build
 3. 在本机 shell 临时设置 `DEPLOYER_PRIVATE_KEY`；可选设置 `ARC_RPC`。执行 `node scripts/deploy.mjs`。脚本会先检查链 ID，以及 D20DAO 官方部署清单中代理和实现合约的地址、链上代码哈希，检查失败时中止。
 4. 保存打印的游戏合约地址和交易哈希，在 [Arc 浏览器](https://explorer.arc.io) 核验。通过 `fundOperations()` 或直接转入原生 USDC，给金库准备足够的 D20DAO 费用。D20DAO 主网代理地址由[官方部署表](https://d20dao.org/docs/deployments)核对；本脚本目前使用 `0xd20da057469C45928912d983F45790C41e290571`。
 5. Cloudflare Workers & Pages 中将**本目录**作为新项目的仓库根目录。Build command 为 `npm run build`，Deploy command 为 `npx wrangler deploy`（使用根目录 `wrangler.jsonc`），Node 版本设置 ≥22.13。构建变量 `VITE_GAME_ADDRESS` 填游戏合约地址，值栏只填 `0x...` 地址。重新构建后打开网页检查轮次与金库显示。
-6. 自动 keeper 使用 `worker/wrangler.jsonc`。将 `GAME_ADDRESS` 改为合约地址，然后 `npx wrangler secret put KEEPER_PRIVATE_KEY --config worker/wrangler.jsonc`，最后 `npx wrangler deploy --config worker/wrangler.jsonc`。此钱包只用作 keeper Gas，**不要**用部署/资金主钱包。Cloudflare Cron 每分钟运行一次。可在 Worker 日志查看交易与余额不足报错。
+6. 自动 keeper 使用 `worker/wrangler.jsonc`；确认其中的 `GAME_ADDRESS` 为当前游戏合约。先准备独立 keeper 钱包并存入少量 Arc 原生 USDC 支付每次交易 Gas，然后运行 `npx wrangler login`、`npx wrangler deploy --config worker/wrangler.jsonc` 和 `npx wrangler secret put KEEPER_PRIVATE_KEY --config worker/wrangler.jsonc`。先创建 Worker 再添加 Secret；添加完成前若定时任务运行，只会报缺少私钥，不会发交易。私钥只在 Wrangler 的 Secret 提示中输入，**不要**用部署钱包，也不要放进 GitHub 或 `vars`。此步骤部署的是第二个 Worker `ore-nine-arc-keeper`，不是重部署游戏合约。检查其 Cron Trigger 和日志；Cron 初次生效可能延迟。空轮也会消耗 keeper Gas 才能推进。
 7. 要提取手续费，用**部署合约时的同一钱包**连接页面，在“项目方手续费”框输入金额，或点击“全部可提”，确认交易。合约固定转给部署钱包，无法指定其他收款人。不要把该钱包私钥交给 Cloudflare 或其他人。
 8. 在小额试运行期间依次检查两格参与、开奖、两类玩家领取、单格取消和超时取消。持续监测 D20DAO 实际服务费、金库、keeper 钱包余额。
 

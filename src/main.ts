@@ -34,6 +34,7 @@ app.innerHTML = `<main class="shell"><header><div class="brand">◈ NINE / ARC</
 document.querySelector('.oracle')!.insertAdjacentHTML('beforeend', '<br>项目方可提手续费 <b id="available-fees">—</b>');
 document.querySelector('.column')!.insertAdjacentHTML('beforeend', '<div id="owner-card" class="card" hidden><span class="eyebrow">OWNER / FEES</span><h2>项目方手续费</h2><p class="muted">仅部署钱包可提取已结算且未用于开奖的手续费。提取后运营金库减少，可能影响后续开奖。</p><label>提取金额（USDC）<input id="withdraw-amount" type="number" min="0" step="any" placeholder="输入提取金额"></label><div class="action-row"><button id="withdraw-max">全部可提</button><button id="withdraw-btn">提取手续费</button></div></div>');
 document.querySelector('#stake-btn')!.insertAdjacentHTML('afterend', '<p id="stake-hint" class="muted" aria-live="polite"></p>');
+document.querySelector('#state-text')!.insertAdjacentHTML('afterend', '<div class="draw-timing" aria-live="polite"><span id="draw-label">距可发起开奖</span><strong id="draw-countdown">—</strong><small id="draw-explain">至少两个不同格子参与才会开奖。</small></div>');
 let availableFees = 0n;
 
 function notice(message: string, error = false) { const el = document.querySelector<HTMLDivElement>('#notice')!; el.textContent = message; el.className = `notice ${error ? 'error' : ''}`; el.hidden = false; }
@@ -180,9 +181,33 @@ async function refresh() {
 function updateTime() {
   if (!round) return;
   const now = Math.floor(Date.now() / 1000); const close = Number(round.closesAt); const left = Math.max(0, close - now);
+  const graceLeft = Math.max(0, close + 60 - now);
+  const clock = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  const drawLabel = document.querySelector('#draw-label')!;
+  const drawCountdown = document.querySelector('#draw-countdown')!;
+  const drawExplain = document.querySelector('#draw-explain')!;
   document.querySelector('#timer')!.textContent = left ? `${left}s` : '已截止';
   document.querySelector('#round-badge')!.textContent = Number(round.status) === 0 && now >= close ? '已截止' : status[Number(round.status)];
-  document.querySelector('#state-text')!.textContent = now < close ? '投入阶段。只对有投入的格子开奖。' : now < close + 60 ? '投入已关闭。等待 D20DAO 开奖与结算。' : '开奖窗口已到期；若无有效结果可取消退款。';
+  if (Number(round.status) === 0 && now < close) {
+    drawLabel.textContent = '距可发起开奖'; drawCountdown.textContent = clock(left);
+    drawExplain.textContent = '截止后仅从至少两个已参与格子中开奖。';
+  } else if (Number(round.status) === 0 && round.occupiedCount < 2n) {
+    drawLabel.textContent = '参与格不足两格'; drawCountdown.textContent = '不开奖';
+    drawExplain.textContent = '本轮将取消并全额退款，之后开启下一轮。';
+  } else if (Number(round.status) === 0 && graceLeft > 0) {
+    drawLabel.textContent = '开奖请求窗口剩余'; drawCountdown.textContent = clock(graceLeft);
+    drawExplain.textContent = '需在窗口结束前请求 D20DAO 随机数。';
+  } else if (Number(round.status) === 1 && graceLeft > 0) {
+    drawLabel.textContent = '等待 D20DAO 随机结果'; drawCountdown.textContent = clock(graceLeft);
+    drawExplain.textContent = '结果没有固定返回时间；倒计时是无结果时的可取消时间。';
+  } else if (Number(round.status) === 1) {
+    drawLabel.textContent = '等待结算或取消'; drawCountdown.textContent = '—';
+    drawExplain.textContent = '有效结果仍应结算；无有效结果可取消并退款。';
+  } else {
+    drawLabel.textContent = '开奖窗口已过'; drawCountdown.textContent = '可取消';
+    drawExplain.textContent = '本轮需取消并退款，随后开启下一轮。';
+  }
+  document.querySelector('#state-text')!.textContent = Number(round.status) === 1 ? '已发起开奖，等待随机结果与结算。' : now < close ? '投入阶段。只对有投入的格子开奖。' : graceLeft > 0 ? '投入已关闭。等待开奖或取消。' : '开奖窗口已到期；若无有效结果可取消退款。';
   const stakeButton = document.querySelector<HTMLButtonElement>('#stake-btn')!;
   stakeButton.disabled = !ready || !account || !walletOnArc || Number(round.status) !== 0 || now >= close;
   stakeButton.title = !account ? '请先连接钱包' : !walletOnArc ? '请切换到 Arc 主网' : now >= close ? '本轮已截止，请先开启下一轮' : '';
@@ -212,4 +237,6 @@ async function renderPositions() {
 
 renderBoard();
 setTimeout(() => void restoreWallet(), 700);
-void refresh(); setInterval(() => { updateTime(); void refresh(); }, 15_000);
+void refresh();
+setInterval(updateTime, 1_000);
+setInterval(() => void refresh(), 15_000);
